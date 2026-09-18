@@ -1,0 +1,9 @@
+# Throwaway Docker learning material (Milestone 0) - not part of the real project
+sandbox/
+
+# Local secrets (see air_gapped_intelligence/.env.example for the template)
+.env
+
+# Python
+__pycache__/
+*.pyc
