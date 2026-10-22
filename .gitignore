@@ -7,3 +7,10 @@ sandbox/
 # Python
 __pycache__/
 *.pyc
+
+# Fetched NVD data cache (regenerate via ingestion/fetch_nvd.py, not source)
+ingestion/data/*
+!ingestion/data/.gitkeep
+
+# Virtual environment
+.venv
