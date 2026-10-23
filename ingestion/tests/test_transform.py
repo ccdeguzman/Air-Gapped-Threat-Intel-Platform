@@ -2,7 +2,7 @@
 Unit tests for load_nvd.transform_cve.
 """
 
-from ingestion.load_nvd import transform_cve
+from ingestion.load_nvd import is_rejected, load_page, transform_cve
 
 
 def test_transform_cve_with_cvss_v31_score():
@@ -86,3 +86,33 @@ def test_transform_cve_with_cvss_v2_only():
     assert transform["cvss_score"] == 10.0
     assert transform["severity"] == "HIGH"
     assert transform["cvss_version"] == "2.0"
+
+
+def test_is_rejected_true_for_rejected_status():
+    assert is_rejected({"id": "CVE-TEST-0005", "vulnStatus": "Rejected"}) is True
+
+
+def test_is_rejected_false_for_other_statuses():
+    assert is_rejected({"id": "CVE-TEST-0006", "vulnStatus": "Analyzed"}) is False
+
+
+def test_is_rejected_false_when_status_missing():
+    assert is_rejected({"id": "CVE-TEST-0007"}) is False
+
+
+class FakeTx:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, query, **params):
+        self.calls.append((query.split()[0], params))
+
+
+def test_load_page_deletes_rejected_and_merges_the_rest():
+    tx = FakeTx()
+    props = {"id": "CVE-TEST-0008", "description": "d", "cvss_score": None,
+             "severity": None, "cvss_version": None, "published": "2020-01-01"}
+
+    load_page(tx, [props], ["CVE-TEST-0009"])
+
+    assert tx.calls == [("MATCH", {"id": "CVE-TEST-0009"}), ("MERGE", props)]

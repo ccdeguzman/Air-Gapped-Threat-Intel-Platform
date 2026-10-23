@@ -137,11 +137,23 @@ def load_cve(tx, cve_props: dict) -> None:
     tx.run(query, **cve_props)
 
 
-def load_page(tx, cve_props_list: list[dict]) -> None:
+def is_rejected(raw_cve: dict) -> bool:
+    """True if NVD has withdrawn this CVE (vulnStatus == "Rejected")."""
+    return raw_cve.get("vulnStatus") == "Rejected"
+
+
+def delete_cve(tx, cve_id: str) -> None:
+    """Remove a CVE node, and any relationships it has, if it exists."""
+    tx.run("MATCH (c:CVE {id: $id}) DETACH DELETE c", id=cve_id)
+
+
+def load_page(tx, cve_props_list: list[dict], rejected_ids: list[str]) -> None:
     """
-    Write every CVE in a page to Neo4j in a single transaction.
+    Apply one page in a single transaction: delete rejected CVEs, MERGE the rest.
     This is more efficient than writing each CVE in its own transaction.
     """
+    for cve_id in rejected_ids:
+        delete_cve(tx, cve_id)
     for cve_props in cve_props_list:
         load_cve(tx, cve_props)
 
@@ -159,19 +171,23 @@ def main() -> None:
     if not page_files:
         raise RuntimeError(f"No cached pages in {DATA_DIR} - run fetch_nvd.py first")
 
-    total = 0
+    loaded = 0
+    removed = 0
     with GraphDatabase.driver(uri, auth=(user, password)) as driver:
         ensure_constraint(driver)
         with driver.session() as session:
             for page_file in page_files:
                 with open(page_file, "r", encoding="utf-8") as file:
                     page = json.load(file)
+                raw_cves = [item["cve"] for item in page["vulnerabilities"]]
+                rejected_ids = [c["id"] for c in raw_cves if is_rejected(c)]
                 cve_props_list = [
-                    transform_cve(item["cve"]) for item in page["vulnerabilities"]
+                    transform_cve(c) for c in raw_cves if not is_rejected(c)
                 ]
-                session.execute_write(load_page, cve_props_list)
-                total += len(cve_props_list)
-                print(f"Loaded {page_file.name}: {total} CVEs so far")
+                session.execute_write(load_page, cve_props_list, rejected_ids)
+                loaded += len(cve_props_list)
+                removed += len(rejected_ids)
+                print(f"{page_file.name}: {loaded} loaded, {removed} rejected removed so far")
 
 
 if __name__ == "__main__":
