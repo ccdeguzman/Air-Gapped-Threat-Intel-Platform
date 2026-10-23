@@ -95,9 +95,12 @@ def fetch_all(api_key: str) -> None:
             page = fetch_page_with_retry(start_index, RESULTS_PER_PAGE, api_key)
             # Get total number of results from the first page
             total_results = page["totalResults"]
-            # Save page as JSON
-            with open(filename, "w", encoding="utf-8") as file:
+            # Write to a temp file, then rename, so a page file is never half-written
+            tmp_filename = f"{filename}.tmp"
+            with open(tmp_filename, "w", encoding="utf-8") as file:
                 json.dump(page, file)
+            os.replace(tmp_filename, filename)
+            print(f"Fetched page {page_number} ({start_index + RESULTS_PER_PAGE}/{total_results})")
             # Wait before next request to respect rate limit
             time.sleep(1)  # Adjust sleep time as needed based on rate limit
         # Advance to next page (regardless of whether we fetched or skipped)
