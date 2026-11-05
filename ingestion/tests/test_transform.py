@@ -7,7 +7,7 @@ from ingestion.load_nvd import is_rejected, load_page, transform_cve
 
 def test_transform_cve_with_cvss_v31_score():
     """A CVE with a v3.1 CVSS score should map to cvss_score/severity."""
-    metrics = {"cvssMetricV31": [{"type": "Primary", "source": "nvd@nist.gov", 
+    metrics = {"cvssMetricV31": [{"type": "Primary", "source": "nvd@nist.gov",
                                   "cvssData": {"version":  "3.1",
                                                "baseScore":  10.0,
                                                "baseSeverity":  "CRITICAL"}}]}
@@ -17,9 +17,9 @@ def test_transform_cve_with_cvss_v31_score():
         "metrics": metrics,
         "published": "2021-12-10T10:15:00.000",
     }
-    
+
     transform = transform_cve(raw_cve)
-    
+
     assert transform["cvss_score"] == 10.0
     assert transform["severity"] == "CRITICAL"
     assert transform["cvss_version"] == "3.1"
@@ -29,25 +29,25 @@ def test_transform_cve_with_no_cvss_score():
     """A CVE with no CVSS score at all (e.g. very new/reserved) shouldn't crash -
     cvss_score/severity be instead should be None"""
     metrics = {}
-    
+
     raw_cve = {
         "id": "CVE-TEST-0002",
         "descriptions": [{"lang": "en", "value": "test description"}],
         "metrics": metrics,
         "published": "2021-12-10T10:15:00.000",
     }
-    
+
     transform = transform_cve(raw_cve)
-    
+
     assert transform["cvss_score"] is None
     assert transform["severity"] is None
     assert transform["cvss_version"] is None
-        
+
 
 def test_transform_cve_with_multiple_cvss_versions():
     """A CVE scored under both v2 and v3.1 - confirm your policy picks the
     version you intended (probably prefer the highest CVSS version available)."""
-    metrics = {"cvssMetricV31": [{"type": "Primary", "source": "nvd@nist.gov", 
+    metrics = {"cvssMetricV31": [{"type": "Primary", "source": "nvd@nist.gov",
                                   "cvssData": {"version":  "3.1",
                                                "baseScore":  9.8,
                                                "baseSeverity":  "CRITICAL"}}],
@@ -98,6 +98,78 @@ def test_is_rejected_false_for_other_statuses():
 
 def test_is_rejected_false_when_status_missing():
     assert is_rejected({"id": "CVE-TEST-0007"}) is False
+
+
+def test_transform_cve_with_cvss_v40_only():
+    """ A CVE with only a v4.0 score (Secondary, from a CNA) should be used as a fallback if no v3.x score is present."""
+    metrics = {"cvssMetricV40": [{"type": "Secondary", "source": "ics-cert@hq.dhs.gov",
+                                 "cvssData": {"version": "4.0",
+                                              "baseScore": 8.3,
+                                              "baseSeverity": "HIGH"}}]}
+
+    raw_cve = {
+        "id": "CVE-TEST-0010",
+        "descriptions": [{"lang": "en", "value": "test description"}],
+        "metrics": metrics,
+        "published": "2025-01-01T10:15:00.000",
+    }
+    transform = transform_cve(raw_cve)
+
+    assert transform["cvss_score"] == 8.3
+    assert transform["severity"] == "HIGH"
+    assert transform["cvss_version"] == "4.0"
+
+
+def test_transform_cve_v31_takes_precedence_over_v40():
+    """ When both v3.1 and v4.0 are present, the v3.1 score should take precedence."""
+    metrics = {
+        "cvssMetricV31": [{"type": "Primary", "source": "nvd@nist.gov",
+                            "cvssData": {"version": "3.1",
+                                         "baseScore": 9.0,
+                                         "baseSeverity": "CRITICAL"}}],
+        "cvssMetricV40": [{"type": "Secondary", "source": "ics-cert@hq.dhs.gov",
+                            "cvssData": {"version": "4.0",
+                                         "baseScore": 9.3,
+                                         "baseSeverity": "CRITICAL"}}]
+    }
+
+    raw_cve = {
+        "id": "CVE-TEST-0011",
+        "descriptions": [{"lang": "en", "value": "test description"}],
+        "metrics": metrics,
+        "published": "2025-01-01T10:15:00.000",
+    }
+    transform = transform_cve(raw_cve)
+
+    assert transform["cvss_score"] == 9.0
+    assert transform["severity"] == "CRITICAL"
+    assert transform["cvss_version"] == "3.1"
+
+
+def test_transform_cve_v40_takes_precedence_over_v2():
+    """ When v3.1 and v3.0 are absent, v4.0 should take precedence over v2."""
+    metrics = {
+        "cvssMetricV40": [{"type": "Secondary", "source": "ics-cert@hq.dhs.gov",
+                            "cvssData": {"version": "4.0",
+                                         "baseScore": 9.3,
+                                         "baseSeverity": "CRITICAL"}}],
+        "cvssMetricV2": [{"type": "Primary", "source": "nvd@nist.gov",
+                            "cvssData": {"version": "2.0",
+                                         "baseScore": 7.5},
+                            "baseSeverity": "HIGH"}]
+    }
+
+    raw_cve = {
+        "id": "CVE-TEST-0012",
+        "descriptions": [{"lang": "en", "value": "test description"}],
+        "metrics": metrics,
+        "published": "2025-01-01T10:15:00.000",
+    }
+    transform = transform_cve(raw_cve)
+
+    assert transform["cvss_score"] == 9.3
+    assert transform["severity"] == "CRITICAL"
+    assert transform["cvss_version"] == "4.0"
 
 
 class FakeTx:

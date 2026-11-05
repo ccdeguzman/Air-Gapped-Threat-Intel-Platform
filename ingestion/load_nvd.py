@@ -17,7 +17,7 @@ DATA_DIR = Path(__file__).parent / "data"
 
 def transform_cve(raw_cve: dict) -> dict:
     """Turn one NVD API 'cve' object into flat properties for a CVE node.
-    
+
     Expected output keys:
         id
         description
@@ -27,7 +27,8 @@ def transform_cve(raw_cve: dict) -> dict:
         published
 
     CVSS policy:
-        1. Prefer CVSS v3.1 -> Fall back to CVSS v3.0 -> Fall back to CVSS v2
+        1. Prefer CVSS v3.1 -> Fall back to CVSS v3.0 -> Fall back to CVSS v4.0 -> Fall back to CVSS v2
+            v4.0 scores usually come from a CNA (Secondary), so they shouldn't outrank NVD's own v3.x score. They are only a fallback.
         2. Within a version, prefer the Primary entry.
         3. If there is no Primary entry, use the first entry.
         4. If there is no CVSS data, score, severity and version are None.
@@ -38,64 +39,64 @@ def transform_cve(raw_cve: dict) -> dict:
     """
     # Pull CVE ID
     cve_id = raw_cve["id"]
-      
+
     # Get english description
     description = None
     descriptions = raw_cve.get("descriptions", [])
-    
+
     for item in descriptions:
         if item["lang"] == "en":
             description = item.get("value")
             break
-        
+
     # Find best CVSS version
     cvss_score = None
     severity = None
     cvss_version = None
-    
+
     metrics = raw_cve.get("metrics", {})
-    
-    cvss_ver = ["cvssMetricV31", "cvssMetricV30", "cvssMetricV2"]
-    
+
+    cvss_ver = ["cvssMetricV31", "cvssMetricV30", "cvssMetricV40", "cvssMetricV2"]  # Order of preference
+
     for version in cvss_ver:
         # Does this version exist for this CVE
         if version not in metrics:
             continue
-        
+
         entries = metrics[version]
-        
+
         # Look for Primary CVSS entry
         selected = None
-        
+
         for entry in entries:
             if entry.get("type") == "Primary":
                 selected = entry
                 break
-        
+
         # If there is no primary, use the first entry
         if selected is None and entries:
             selected = entries[0]
-        
+
         # Nothing usable
         if selected is None:
             continue
-        
+
         # Extract CVSS data
         cvss_data = selected.get("cvssData", {})
         cvss_score = cvss_data.get("baseScore")
         cvss_version = cvss_data.get("version")
-        
+
         # v3.x keeps baseSeverity inside cvssData; v2 keeps it on the entry.
         if version == "cvssMetricV2":
             severity = selected.get("baseSeverity")
         else:
             severity = cvss_data.get("baseSeverity")
-        
+
         # Break once the highest-priority usable CVSS version is found
         break
-    
+
     published = raw_cve.get("published")
-    
+
     return {
         "id": cve_id,
         "description": description,
@@ -111,7 +112,7 @@ def ensure_constraint(driver) -> None:
     Create the uniqueness constraint on CVE.id if it doesn't exist yet.
     It requires the id property of every CVE node to be unique
     """
-    
+
     with driver.session() as session:
         session.run("""
                     CREATE CONSTRAINT cve_id_unique
@@ -124,7 +125,7 @@ def load_cve(tx, cve_props: dict) -> None:
     """
     Write a single transformed CVE via MERGE (idempotent re-runs).
     """
-    
+
     query = """
     MERGE (c:CVE {id: $id})
     SET c.description = $description,
@@ -133,7 +134,7 @@ def load_cve(tx, cve_props: dict) -> None:
         c.cvss_version = $cvss_version,
         c.published = $published
     """
-    
+
     tx.run(query, **cve_props)
 
 
