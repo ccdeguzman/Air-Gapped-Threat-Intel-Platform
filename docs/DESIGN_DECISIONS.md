@@ -12,7 +12,7 @@
 - **No score available**: some CVEs (e.g. newly published, "awaiting analysis") have no `metrics` at all. `cvss_score`, `severity` and `cvss_version` are left as `None` rather than a sentinel value. In Neo4j  `SET x = null` removes the property, and Cypher treats a missing property and an explicit `null` the same way under both comparisons (`WHERE c.cvss_score > 7.0`) and `IS NULL` checks, so no sentinel is needed. 34 of the first 2,000 CVEs had no score.
 
 ## Done
-- Milestone 2 (in progress): NVD CVE ingestion
+- Milestone 2 (complete): NVD CVE ingestion
   - Got and activated an NVD API key. An unconfirmed key returns 404 for any `apiKey` header, even a fake one; clicking the email confirmation fixed it.
   - `ingestion/` (sibling of `backend/`): `fetch_nvd.py` (paging, per-page JSON cache, skip-if-cached resume, 1 s pacing, timeout + retry with backoff) and `load_nvd.py` (`transform_cve`, uniqueness constraint,`MERGE` loader, one transaction per page). Run as `python -m ingestion.fetch_nvd` / `python -m ingestion.load_nvd` from `air_gapped_intelligence/`.
   - CVSS policy: v3.1 > v3.0 > v4.0 > v2, `Primary` over `Secondary`, store `cvss_version`, `None` when unscored. Corrected my assumption that v2 has no severity (it sits beside `cvssData`): 1,929 of the first 2,000 CVEs are v2-only.
@@ -22,8 +22,8 @@
 
 ## Milestone 2: NVD ingestion pipeline
 
-- **API plus local cache**: we page through the NVD CVE API 2.0 and cache the raw JSON on disk, instead of using NVD's legacy bulk feed files.
-  *Open item: confirm on NVD's site whether the legacy feeds are deprecated before stating that as the reason.*
+- **API plus local cache**: we page through the NVD CVE API 2.0 and cache the raw JSON on disk. The legacy 1.1 bulk feeds were never an option: NVD removed them on 20 August 2025 (NVD Technical Update, checked on NIST's NVD news page) and tells users to move to the 2.0 APIs or the 2.0 data feed files (yearly, "recent" and "modified" files). We chose the API because per-page caching gives a resumable fetch that is easy to build and test. The cost was speed: the full run (207 pages, median ~85 s per page) was slow because NVD dropped large responses. The 2.0 yearly feed files would mean fewer, larger downloads, so they are worth reconsidering for the refresh path.
+  *Not verified: whether the 2.0 feed files are currently listed on NVD's data-feeds page (the page did not load when checked).*
 - **Fetch and load are separate standalone scripts**: fetching is slow and rate-limited; loading is fast and repeatable. With the cache between them we can re-run the load without touching the network, and `transform_cve` is testable without a network or database. Ingestion is a batch job, so it lives in `ingestion/`, outside the always-running API container.
 - **One file per page, skip-if-cached**: pages are saved as `nvd_page_<n>.json`. A re-run skips pages already on disk and reads `totalResults` from a cached page to find the stopping point, so a crash costs no completed work or rate-limit budget. The filenames depend on `RESULTS_PER_PAGE`: if it changes, clear the cache first (a mismatch causes overlapping pages, not gaps, and `MERGE` absorbs the overlap).
 - **Atomic page writes**: each page is written to `nvd_page_<n>.json.tmp` and then moved into place with `os.replace`. A rename is all-or-nothing, so a page file is either complete or absent. Without it, a fetch killed mid-write would leave a truncated file that the skip-if-cached check treats as "done" forever, and a loader running alongside the fetch could read a half-written file. Leftover `.tmp` files are harmless: the loader's `nvd_page_*.json` pattern ignores them and the next run overwrites them. Checked by simulating a crash mid-write: the real file never appeared.
@@ -38,17 +38,17 @@
 - **CVSS 4.0 is a fallback, ranked below v3.x**: the first policy was v3.1 > v3.0 > v2, which left 11,648 loaded CVEs without a score. Most were Rejected (excluded now), but 7,452 of the newest CVEs are scored only under CVSS 4.0, and they would have shown as unscored. The order is now v3.1 > v3.0 > v4.0 > v2. v4.0 ranks below v3.x because those scores usually come from the CNA (`Secondary`), while NVD's own v3.x analysis is `Primary`, so a CNA score should not override NVD's. It ranks above v2 because v2 is deprecated and the v4.0 score is far more recent. After the reload, 4,196 CVEs (about 1.1%) remain unscored. Each node's `cvss_version` says which scale applies.
 - **One transaction per page**: `load_page` writes a page of up to 2,000  CVEs in one transaction, about 200 commits instead of ~400k. If a page fails, only it rolls back, and the re-run is safe because of `MERGE`. Batching with `UNWIND` would be faster still; deferred as an optimization.
 
+## Milestone 2 result
+- Full NVD cache: 207 pages, 413,772 CVE ids (`totalResults` grew from 398,697 to 413,772 during the fetch; the loop reads it from each response, so it handled that). 18,631 are Rejected and excluded, leaving 395,141 CVE nodes in Neo4j, matching the cache exactly. A full load takes about 10 minutes.
+- Final `cvss_version` split: 3.1: 267,819; 2.0: 72,405; 3.0: 43,269; 4.0: 7,452; unscored: 4,196 (about 1.1%).
+
 ## Next
-- Milestone 2, remaining:
-  1. Finish the fetch: 55 of ~200 pages cached (through mid-2018); newer CVEs are missing. Re-run `python -m ingestion.fetch_nvd` to resume. NVD dropped several large responses; if retries stay frequent, try `RESULTS_PER_PAGE = 1000` (clear the cache first).
-  2. Make the page write atomic (temp file + `os.replace`) and add a per-page progress print.
-  3. Run the full load; check the Neo4j count is near NVD's `totalResults` (398,697 on 2026-10-22) and note the load time.
-  4. Add the atomic-write bullet to `docs/DESIGN_DECISIONS.md`; confirm whether NVD's legacy feeds are deprecated.
-  5. Commit the Milestone 2 code (nothing is committed yet).
-  6. Milestone wrap-up: what I learned, 2-3 interview questions, a draft resume bullet.
+- Milestone 3: CISA KEV enrichment. Add known-exploited status as properties on existing `CVE` nodes (`MATCH` + `SET`, not new nodes). See `PROGRESS.md` for the step list.
 
 ## Open issues / notes
-- **Timeline**: the end-of-October target is at risk after a ~4-week break and Milestones 3-6 still ahead. Decide what to cut (CWE layer, multi-hop paths, UI) once Milestone 2 closes.
+- **Timeline**: deadline moved to 2026-12-31. Cut stretch scope (CWE layer, multi-hop paths, UI) before extending it again.
 - **Fetch reliability**: NVD drops large responses (`ChunkedEncodingError`). Cached filenames depend on `RESULTS_PER_PAGE`; changing it means clearing `ingestion/data/`. `fetch_all` also re-parses every cached file in the skip branch, though it only needs the first page's `totalResults`.
+- **Loader nit**: pages are loaded in lexicographic order (`nvd_page_10` before `nvd_page_2`). Harmless because `MERGE` is order-independent, but a natural sort would make the progress log read correctly.
+- **Refresh path**: this is a one-shot snapshot. Keeping it current (NVD `lastModStartDate`/`lastModEndDate` queries, or the 2.0 "modified" feed) is not designed yet.
 - **Disk**: 16 GB free on C:. The full cache is ~1-2.5 GB; Ollama models in Milestone 6 need several GB.
 - **Restarting a session**: use `.venv\Scripts\python.exe` directly (the venv is 3.10.11; system `python` is 3.14), start Docker Desktop, then `docker compose up -d`.

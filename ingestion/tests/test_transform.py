@@ -101,7 +101,7 @@ def test_is_rejected_false_when_status_missing():
 
 
 def test_transform_cve_with_cvss_v40_only():
-    """ A CVE with only a v4.0 score (Secondary, from a CNA) should be used as a fallback if no v3.x score is present."""
+    """A CVE with only a v4.0 score (Secondary, from a CNA) should be used as a fallback if no v3.x score is present."""
     metrics = {"cvssMetricV40": [{"type": "Secondary", "source": "ics-cert@hq.dhs.gov",
                                  "cvssData": {"version": "4.0",
                                               "baseScore": 8.3,
